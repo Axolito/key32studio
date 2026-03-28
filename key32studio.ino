@@ -89,7 +89,7 @@ void setup() {
   } else {
     Serial.println("\nEchec WiFi -> mode Access Point");
     WiFi.mode(WIFI_AP);
-    WiFi.softAP("CompanionPanel", "companion123");
+    WiFi.softAP("Key32Studio", "key32studio");
     Serial.printf("AP IP : %s\n", WiFi.softAPIP().toString().c_str());
   }
 
