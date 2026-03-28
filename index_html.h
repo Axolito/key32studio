@@ -9,8 +9,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     <title>Key 32 Studio</title>
 
     <style>
-
-      :root {
+    :root {
         --bg: #0a0c10;
         --surface: #12161e;
         --surface2: #1a2030;
@@ -21,81 +20,85 @@ const char index_html[] PROGMEM = R"rawliteral(
         --text: #c8d8f0;
         --muted: #4a5a78;
         --danger: #ff2d55;
-      }
+    }
 
-      * {
+    * {
         box-sizing: border-box;
         margin: 0;
         padding: 0;
-      }
+    }
 
-      body {
+    body {
         background: var(--bg);
         color: var(--text);
         font-family: 'Exo 2', sans-serif;
         min-height: 100vh;
-      }
+    }
 
-      header {
+    header {
         display: flex;
         align-items: center;
         gap: 16px;
         padding: 20px 32px;
         border-bottom: 1px solid var(--border);
-      }
+    }
 
-      main {
+    main {
         max-width: 900px;
         margin: 0 auto;
         padding: 32px 24px;
         display: flex;
         flex-direction: column;
         gap: 32px;
-      }
+    }
 
-      section {
+    section {
         background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 4px;
-      }
+    }
 
-      .sec-header {
+    .sec-header {
         display: flex;
         align-items: center;
         gap: 12px;
         padding: 14px 24px;
         background: var(--surface2);
-      }
+    }
 
-      .sec-body {
+    .sec-body {
         padding: 24px;
-      }
+    }
 
-      .grid2 {
+    .grid2 {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 16px;
-      }
+    }
 
-      .field {
+    .field {
         display: flex;
         flex-direction: column;
         gap: 6px;
-      }
+    }
 
-      input {
+    input {
         background: var(--bg);
         border: 1px solid var(--border);
         color: var(--text);
         padding: 10px;
-      }
+    }
 
-      button {
-        padding: 10px 16px;
-        cursor: pointer;
-      }
+    table {
+        width: 100%;
+    }
 
-      .test_btn {
+    td {
+        text-align: center;
+        padding: 5px;
+    }
+
+    .test_btn {
         background: #fff9c0;
         border: 2px solid #f5e27a;
         border-radius: 8px;
@@ -109,26 +112,40 @@ const char index_html[] PROGMEM = R"rawliteral(
         display: inline-flex;
         align-items: center;
         justify-content: center;
-      }
+    }
 
-      .test_btn:hover {
+    .test_btn:hover {
         background: #fffec0;
         box-shadow: inset 0 3px 6px rgba(0,0,0,0.2), 0 4px 6px rgba(255, 255, 255, 0.38);
-      }
+    }
 
-      .btn-primary {
+    .btns_div {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .btn {
+        border-radius: 8px;
+        padding: 10px 16px;
+        cursor: pointer;
+        font-weight: bold;
+        margin: 5px;
+    }
+
+    .btn-primary {
         background: var(--accent);
         color: #000;
-      }
+    }
 
-      .btn-ghost {
+    .btn-ghost {
         background: transparent;
         color: #fff;
-      }
+    }
 
-      .btn-danger {
+    .btn-danger {
         color: red;
-      }
+    }
     </style>
   </head>
 
@@ -175,10 +192,10 @@ const char index_html[] PROGMEM = R"rawliteral(
         </div>
       </section>
 
-      <div>
-        <button class="btn-primary" onclick="saveConfig()">Sauvegarder</button>
-        <button class="btn-ghost" onclick="loadConfig()">Recharger</button>
-        <button class="btn-danger" onclick="reboot()">Redémarrer</button>
+      <div class="btns_div">
+        <button class="btn btn-primary" onclick="saveConfig()">Sauvegarder</button>
+        <button class="btn btn-ghost" onclick="loadConfig()">Recharger</button>
+        <button class="btn btn-danger" onclick="reboot()">Redémarrer</button>
       </div>
     </main>
 
