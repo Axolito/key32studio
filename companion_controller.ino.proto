@@ -1,0 +1,476 @@
+/*
+ * Bitfocus Companion Controller - ESP32
+ * 4x MX Switch Panel — Pins: 32, 33, 25, 26
+ * Protocole : HTTP REST API Companion v3+
+ *
+ * Dependances Arduino :
+ *   - ArduinoJson (v6) -> Gestionnaire de bibliotheques
+ *   - WiFi, WebServer, Preferences, HTTPClient -> inclus dans le core ESP32
+ */
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <HTTPClient.h>
+#include <Preferences.h>
+#include <ArduinoJson.h>
+
+// ─── Configuration WiFi par defaut ────────────────────────────────────────────
+String wifi_ssid     = "MonReseau";
+String wifi_password = "MonMotDePasse";
+
+// ─── Configuration Companion par defaut ───────────────────────────────────────
+String companion_ip   = "192.168.1.100";
+int    companion_port = 8888;
+
+// ─── Pins des touches ─────────────────────────────────────────────────────────
+const int NUM_KEYS   = 4;
+const int KEY_PINS[] = {32, 33, 25, 26};
+
+// ─── Configuration par touche ─────────────────────────────────────────────────
+struct KeyConfig {
+  String label;
+  int    page;
+  int    row;
+  int    col;
+  bool   enabled;
+};
+
+KeyConfig keys[NUM_KEYS] = {
+  {"Key 1", 1, 0, 0, true},
+  {"Key 2", 1, 0, 1, true},
+  {"Key 3", 1, 0, 2, true},
+  {"Key 4", 1, 0, 3, true},
+};
+
+// ─── Etat des boutons ─────────────────────────────────────────────────────────
+bool lastKeyState[NUM_KEYS];
+bool currentKeyState[NUM_KEYS];
+unsigned long lastDebounce[NUM_KEYS];
+const unsigned long DEBOUNCE_MS = 50;
+
+// ─── Serveur Web ──────────────────────────────────────────────────────────────
+WebServer server(80);
+Preferences prefs;
+
+// ─── Prototypes ───────────────────────────────────────────────────────────────
+void companionPost(int keyIndex, const char* action);
+void loadConfig();
+void saveConfig();
+void setupRoutes();
+String buildHTML();
+
+// ═══════════════════════════════════════════════════════════════════════════════
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\n=== Companion Controller ===");
+
+  for (int i = 0; i < NUM_KEYS; i++) {
+    pinMode(KEY_PINS[i], INPUT_PULLUP);
+    lastKeyState[i]    = HIGH;
+    currentKeyState[i] = HIGH;
+    lastDebounce[i]    = 0;
+  }
+
+  loadConfig();
+
+  Serial.printf("Connexion a %s ...\n", wifi_ssid.c_str());
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
+
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("\nConnecte ! IP : %s\n", WiFi.localIP().toString().c_str());
+  } else {
+    Serial.println("\nEchec WiFi -> mode Access Point");
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP("CompanionPanel", "companion123");
+    Serial.printf("AP IP : %s\n", WiFi.softAPIP().toString().c_str());
+  }
+
+  setupRoutes();
+  server.begin();
+  Serial.println("Serveur web demarre");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+void loop() {
+  server.handleClient();
+  scanKeys();
+}
+
+// ─── Lecture & debounce des touches ───────────────────────────────────────────
+void scanKeys() {
+  unsigned long now = millis();
+  for (int i = 0; i < NUM_KEYS; i++) {
+    bool reading = digitalRead(KEY_PINS[i]);
+
+    if (reading != lastKeyState[i]) lastDebounce[i] = now;
+
+    if ((now - lastDebounce[i]) > DEBOUNCE_MS) {
+      if (reading != currentKeyState[i]) {
+        currentKeyState[i] = reading;
+        if (!keys[i].enabled) continue;
+
+        if (currentKeyState[i] == LOW) {
+          Serial.printf("-> Key %d DOWN (%s)\n", i + 1, keys[i].label.c_str());
+          companionPost(i, "down");
+        } else {
+          Serial.printf("-> Key %d UP   (%s)\n", i + 1, keys[i].label.c_str());
+          companionPost(i, "up");
+        }
+      }
+    }
+    lastKeyState[i] = reading;
+  }
+}
+
+// ─── Envoi HTTP vers Companion ────────────────────────────────────────────────
+void companionPost(int keyIndex, const char* action) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("  WiFi non connecte, envoi ignore");
+    return;
+  }
+
+  String url = "http://" + companion_ip + ":" + companion_port
+             + "/api/location/"
+             + keys[keyIndex].page + "/"
+             + keys[keyIndex].row  + "/"
+             + keys[keyIndex].col  + "/"
+             + action;
+
+  Serial.printf("  POST %s\n", url.c_str());
+
+  HTTPClient http;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  int code = http.POST("");
+  Serial.printf("  -> HTTP %d\n", code);
+  http.end();
+}
+
+// ─── Persistance NVS ──────────────────────────────────────────────────────────
+void loadConfig() {
+  prefs.begin("companion", false);
+  wifi_ssid      = prefs.getString("wifi_ssid", wifi_ssid);
+  wifi_password  = prefs.getString("wifi_pass", wifi_password);
+  companion_ip   = prefs.getString("comp_ip",   companion_ip);
+  companion_port = prefs.getInt   ("comp_port", companion_port);
+  for (int i = 0; i < NUM_KEYS; i++) {
+    String p = "k" + String(i) + "_";
+    keys[i].label   = prefs.getString((p + "label").c_str(), keys[i].label);
+    keys[i].page    = prefs.getInt   ((p + "page").c_str(),  keys[i].page);
+    keys[i].row     = prefs.getInt   ((p + "row").c_str(),   keys[i].row);
+    keys[i].col     = prefs.getInt   ((p + "col").c_str(),   keys[i].col);
+    keys[i].enabled = prefs.getBool  ((p + "en").c_str(),    keys[i].enabled);
+  }
+  prefs.end();
+  Serial.println("Config chargee depuis NVS");
+}
+
+void saveConfig() {
+  prefs.begin("companion", false);
+  prefs.putString("wifi_ssid", wifi_ssid);
+  prefs.putString("wifi_pass", wifi_password);
+  prefs.putString("comp_ip",   companion_ip);
+  prefs.putInt   ("comp_port", companion_port);
+  for (int i = 0; i < NUM_KEYS; i++) {
+    String p = "k" + String(i) + "_";
+    prefs.putString((p + "label").c_str(), keys[i].label);
+    prefs.putInt   ((p + "page").c_str(),  keys[i].page);
+    prefs.putInt   ((p + "row").c_str(),   keys[i].row);
+    prefs.putInt   ((p + "col").c_str(),   keys[i].col);
+    prefs.putBool  ((p + "en").c_str(),    keys[i].enabled);
+  }
+  prefs.end();
+  Serial.println("Config sauvegardee dans NVS");
+}
+
+// ─── Routes HTTP ──────────────────────────────────────────────────────────────
+void setupRoutes() {
+
+  server.on("/", HTTP_GET, []() {
+    server.send(200, "text/html", buildHTML());
+  });
+
+  // GET /api/config
+  server.on("/api/config", HTTP_GET, []() {
+    StaticJsonDocument<1024> doc;
+    doc["wifi_ssid"]      = wifi_ssid;
+    doc["wifi_password"]  = "";
+    doc["companion_ip"]   = companion_ip;
+    doc["companion_port"] = companion_port;
+    JsonArray arr = doc.createNestedArray("keys");
+    for (int i = 0; i < NUM_KEYS; i++) {
+      JsonObject k = arr.createNestedObject();
+      k["label"]   = keys[i].label;
+      k["page"]    = keys[i].page;
+      k["row"]     = keys[i].row;
+      k["col"]     = keys[i].col;
+      k["enabled"] = keys[i].enabled;
+      k["pin"]     = KEY_PINS[i];
+    }
+    String out;
+    serializeJson(doc, out);
+    server.send(200, "application/json", out);
+  });
+
+  // POST /api/config
+  server.on("/api/config", HTTP_POST, []() {
+    if (!server.hasArg("plain")) {
+      server.send(400, "application/json", "{\"error\":\"no body\"}");
+      return;
+    }
+    StaticJsonDocument<1024> doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+      server.send(400, "application/json", "{\"error\":\"json invalide\"}");
+      return;
+    }
+    if (doc.containsKey("wifi_ssid"))    wifi_ssid    = doc["wifi_ssid"].as<String>();
+    if (doc.containsKey("wifi_password") && doc["wifi_password"].as<String>().length() > 0)
+                                         wifi_password = doc["wifi_password"].as<String>();
+    if (doc.containsKey("companion_ip")) companion_ip  = doc["companion_ip"].as<String>();
+    if (doc.containsKey("companion_port")) companion_port = doc["companion_port"].as<int>();
+    if (doc.containsKey("keys")) {
+      int i = 0;
+      for (JsonObject k : doc["keys"].as<JsonArray>()) {
+        if (i >= NUM_KEYS) break;
+        if (k.containsKey("label"))   keys[i].label   = k["label"].as<String>();
+        if (k.containsKey("page"))    keys[i].page    = k["page"].as<int>();
+        if (k.containsKey("row"))     keys[i].row     = k["row"].as<int>();
+        if (k.containsKey("col"))     keys[i].col     = k["col"].as<int>();
+        if (k.containsKey("enabled")) keys[i].enabled = k["enabled"].as<bool>();
+        i++;
+      }
+    }
+    saveConfig();
+    server.send(200, "application/json", "{\"status\":\"ok\"}");
+  });
+
+  // POST /api/test  {"key": 0}
+  server.on("/api/test", HTTP_POST, []() {
+    if (!server.hasArg("plain")) { server.send(400); return; }
+    StaticJsonDocument<64> doc;
+    deserializeJson(doc, server.arg("plain"));
+    int idx = doc["key"] | -1;
+    if (idx < 0 || idx >= NUM_KEYS) {
+      server.send(400, "application/json", "{\"error\":\"index invalide\"}");
+      return;
+    }
+    companionPost(idx, "press");
+    server.send(200, "application/json", "{\"status\":\"ok\"}");
+  });
+
+  // POST /api/reboot
+  server.on("/api/reboot", HTTP_POST, []() {
+    server.send(200, "application/json", "{\"status\":\"reboot\"}");
+    delay(500);
+    ESP.restart();
+  });
+}
+
+// ─── Page HTML : construite par concatenation pour eviter le bug raw string ───
+String buildHTML() {
+  String h = "";
+
+  // ── HEAD + CSS ───────────────────────────────────────────────────────────────
+  h += "<!DOCTYPE html><html lang='fr'><head>";
+  h += "<meta charset='UTF-8'>";
+  h += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
+  h += "<title>Companion Panel</title>";
+  h += "<style>";
+  h += "@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;600;800&display=swap');";
+  h += ":root{--bg:#0a0c10;--surface:#12161e;--surface2:#1a2030;--border:#2a3448;";
+  h += "--accent:#00d4ff;--accent2:#ff6b35;--green:#39ff14;--text:#c8d8f0;--muted:#4a5a78;--danger:#ff2d55;}";
+  h += "*{box-sizing:border-box;margin:0;padding:0}";
+  h += "body{background:var(--bg);color:var(--text);font-family:'Exo 2',sans-serif;min-height:100vh;";
+  h += "background-image:radial-gradient(ellipse at 20% 10%,rgba(0,212,255,.04) 0%,transparent 60%),";
+  h += "radial-gradient(ellipse at 80% 80%,rgba(255,107,53,.03) 0%,transparent 60%),";
+  h += "repeating-linear-gradient(0deg,transparent,transparent 40px,rgba(42,52,72,.15) 40px,rgba(42,52,72,.15) 41px),";
+  h += "repeating-linear-gradient(90deg,transparent,transparent 40px,rgba(42,52,72,.15) 40px,rgba(42,52,72,.15) 41px);}";
+  h += "header{display:flex;align-items:center;gap:16px;padding:20px 32px;";
+  h += "border-bottom:1px solid var(--border);background:rgba(18,22,30,.9);";
+  h += "backdrop-filter:blur(10px);position:sticky;top:0;z-index:100;}";
+  h += ".logo{width:36px;height:36px;background:linear-gradient(135deg,var(--accent),var(--accent2));";
+  h += "clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);";
+  h += "display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:#000;}";
+  h += "h1{font-size:1.3rem;font-weight:800;letter-spacing:.1em;color:#fff}";
+  h += ".tag{font-family:'Share Tech Mono',monospace;font-size:.65rem;letter-spacing:.15em;";
+  h += "color:var(--accent);background:rgba(0,212,255,.08);border:1px solid rgba(0,212,255,.2);padding:3px 10px;border-radius:2px;}";
+  h += ".status-dot{width:8px;height:8px;border-radius:50%;background:var(--green);";
+  h += "box-shadow:0 0 8px var(--green);margin-left:auto;animation:pulse 2s infinite;}";
+  h += "@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}";
+  h += ".status-label{font-family:'Share Tech Mono',monospace;font-size:.7rem;color:var(--green);}";
+  h += "main{max-width:900px;margin:0 auto;padding:32px 24px;display:flex;flex-direction:column;gap:32px;}";
+  h += "section{background:var(--surface);border:1px solid var(--border);border-radius:4px;overflow:hidden;}";
+  h += ".sec-header{display:flex;align-items:center;gap:12px;padding:14px 24px;background:var(--surface2);border-bottom:1px solid var(--border);}";
+  h += ".sec-icon{font-size:1rem;width:28px;height:28px;display:flex;align-items:center;justify-content:center;";
+  h += "background:rgba(0,212,255,.08);border:1px solid rgba(0,212,255,.15);border-radius:3px;}";
+  h += ".sec-title{font-size:.75rem;font-weight:600;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);}";
+  h += ".sec-body{padding:24px;}";
+  h += ".grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}";
+  h += ".field{display:flex;flex-direction:column;gap:6px;}";
+  h += "label{font-family:'Share Tech Mono',monospace;font-size:.65rem;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;}";
+  h += "input[type=text],input[type=number],input[type=password]{background:var(--bg);border:1px solid var(--border);border-radius:3px;";
+  h += "color:var(--text);font-family:'Share Tech Mono',monospace;font-size:.9rem;padding:10px 14px;outline:none;transition:border-color .2s,box-shadow .2s;width:100%;}";
+  h += "input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(0,212,255,.12);}";
+  h += ".keys-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}";
+  h += ".key-card{background:var(--bg);border:1px solid var(--border);border-radius:4px;overflow:hidden;transition:border-color .2s;}";
+  h += ".key-card:hover{border-color:rgba(0,212,255,.3);}";
+  h += ".key-header{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--surface2);border-bottom:1px solid var(--border);}";
+  h += ".key-num{font-family:'Share Tech Mono',monospace;font-size:1.1rem;font-weight:700;color:var(--accent);min-width:24px;}";
+  h += ".key-pin{font-family:'Share Tech Mono',monospace;font-size:.65rem;color:var(--muted);margin-left:auto;";
+  h += "background:rgba(42,52,72,.5);border:1px solid var(--border);padding:2px 8px;border-radius:2px;}";
+  h += ".toggle{position:relative;width:36px;height:20px;flex-shrink:0;}";
+  h += ".toggle input{display:none;}";
+  h += ".toggle-track{position:absolute;inset:0;background:var(--border);border-radius:10px;cursor:pointer;transition:background .2s;}";
+  h += ".toggle input:checked+.toggle-track{background:var(--accent);}";
+  h += ".toggle-thumb{position:absolute;top:3px;left:3px;width:14px;height:14px;background:#fff;border-radius:50%;transition:left .2s;pointer-events:none;}";
+  h += ".toggle input:checked~.toggle-thumb{left:19px;}";
+  h += ".key-body{padding:14px 16px;display:flex;flex-direction:column;gap:10px;}";
+  h += ".key-row{display:grid;grid-template-columns:1fr 60px 60px;gap:8px;}";
+  h += ".url-preview{font-family:'Share Tech Mono',monospace;font-size:.6rem;color:var(--muted);";
+  h += "background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:3px;padding:6px 10px;word-break:break-all;line-height:1.6;}";
+  h += ".url-preview b{color:var(--accent2);}";
+  h += ".btn-row{display:flex;gap:10px;margin-top:4px;}";
+  h += "button{font-family:'Exo 2',sans-serif;font-size:.75rem;font-weight:600;letter-spacing:.08em;";
+  h += "text-transform:uppercase;padding:9px 18px;border:1px solid;border-radius:3px;cursor:pointer;transition:all .15s;}";
+  h += ".btn-primary{background:var(--accent);border-color:var(--accent);color:#000;}";
+  h += ".btn-primary:hover{background:#00aacc;box-shadow:0 0 16px rgba(0,212,255,.4);}";
+  h += ".btn-ghost{background:transparent;border-color:var(--border);color:var(--text);}";
+  h += ".btn-ghost:hover{border-color:var(--accent);color:var(--accent);}";
+  h += ".btn-danger{background:transparent;border-color:var(--danger);color:var(--danger);}";
+  h += ".btn-danger:hover{background:rgba(255,45,85,.1);}";
+  h += ".btn-test{background:rgba(57,255,20,.08);border-color:var(--green);color:var(--green);font-size:.7rem;padding:6px 12px;flex:1;}";
+  h += ".btn-test:hover{background:rgba(57,255,20,.18);box-shadow:0 0 12px rgba(57,255,20,.3);}";
+  h += ".btn-test:active{transform:scale(.96);}";
+  h += ".actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;}";
+  h += ".toast{display:none;font-family:'Share Tech Mono',monospace;font-size:.75rem;letter-spacing:.05em;padding:10px 18px;border-radius:3px;border:1px solid;}";
+  h += ".toast.ok{color:var(--green);border-color:var(--green);background:rgba(57,255,20,.06);}";
+  h += ".toast.err{color:var(--danger);border-color:var(--danger);background:rgba(255,45,85,.06);}";
+  h += ".info-bar{display:flex;gap:8px;flex-wrap:wrap;font-family:'Share Tech Mono',monospace;font-size:.68rem;";
+  h += "color:var(--muted);padding:12px 24px;border-top:1px solid var(--border);background:var(--surface2);align-items:center;}";
+  h += ".info-bar b{color:var(--accent2);}";
+  h += "@media(max-width:600px){.grid2,.keys-grid,.key-row{grid-template-columns:1fr;}";
+  h += "header{padding:14px 16px;}main{padding:20px 14px;}}";
+  h += "</style></head><body>";
+
+  // ── BODY HTML ────────────────────────────────────────────────────────────────
+  h += "<header>";
+  h += "<div class='logo'>CP</div>";
+  h += "<h1>COMPANION PANEL</h1>";
+  h += "<div class='tag'>ESP32 &middot; 4 KEYS &middot; HTTP REST</div>";
+  h += "<div class='status-dot'></div><span class='status-label'>ONLINE</span>";
+  h += "</header><main>";
+
+  h += "<section><div class='sec-header'><div class='sec-icon'>&#128225;</div>";
+  h += "<span class='sec-title'>WiFi</span></div><div class='sec-body grid2'>";
+  h += "<div class='field'><label>SSID</label><input type='text' id='wifi_ssid'></div>";
+  h += "<div class='field'><label>Mot de passe</label><input type='password' id='wifi_password' placeholder='&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;'></div>";
+  h += "</div></section>";
+
+  h += "<section><div class='sec-header'><div class='sec-icon'>&#127897;</div>";
+  h += "<span class='sec-title'>Bitfocus Companion</span></div><div class='sec-body grid2'>";
+  h += "<div class='field'><label>Adresse IP</label>";
+  h += "<input type='text' id='companion_ip' placeholder='192.168.1.100' oninput='refreshPreviews()'></div>";
+  h += "<div class='field'><label>Port HTTP</label>";
+  h += "<input type='number' id='companion_port' placeholder='8888' min='1' max='65535' oninput='refreshPreviews()'></div>";
+  h += "</div></section>";
+
+  h += "<section><div class='sec-header'><div class='sec-icon'>&#128280;</div>";
+  h += "<span class='sec-title'>Configuration des touches</span></div>";
+  h += "<div class='sec-body'><div class='keys-grid' id='keys-container'></div></div>";
+  h += "<div class='info-bar'>POST <b>http://&lt;ip&gt;:&lt;port&gt;/api/location/&lt;page&gt;/&lt;row&gt;/&lt;col&gt;/down</b>";
+  h += " &nbsp;|&nbsp; POST <b>http://&lt;ip&gt;:&lt;port&gt;/api/location/&lt;page&gt;/&lt;row&gt;/&lt;col&gt;/up</b></div>";
+  h += "</section>";
+
+  h += "<div class='actions'>";
+  h += "<button class='btn-primary' onclick='saveConfig()'>&#128190; Sauvegarder</button>";
+  h += "<button class='btn-ghost'   onclick='loadConfig()'>&#8635; Recharger</button>";
+  h += "<button class='btn-danger'  onclick='reboot()'>&#8635; Redemarrer ESP32</button>";
+  h += "<div class='toast' id='toast'></div>";
+  h += "</div></main>";
+
+  // ── JAVASCRIPT ───────────────────────────────────────────────────────────────
+  h += "<script>";
+  h += "var cfg={keys:[],companion_ip:'',companion_port:8888};";
+
+  h += "function buildUrl(i){";
+  h += "var ip=document.getElementById('companion_ip').value||cfg.companion_ip||'...';";
+  h += "var port=document.getElementById('companion_port').value||cfg.companion_port||8888;";
+  h += "var pg=document.getElementById('k'+i+'_page')?document.getElementById('k'+i+'_page').value:(cfg.keys[i]?cfg.keys[i].page:1);";
+  h += "var rw=document.getElementById('k'+i+'_row')?document.getElementById('k'+i+'_row').value:(cfg.keys[i]?cfg.keys[i].row:0);";
+  h += "var cl=document.getElementById('k'+i+'_col')?document.getElementById('k'+i+'_col').value:(cfg.keys[i]?cfg.keys[i].col:0);";
+  h += "return 'http://'+ip+':'+port+'/api/location/'+pg+'/'+rw+'/'+cl+'/<b>down</b> | <b>up</b>';}";
+
+  h += "function refreshPreviews(){";
+  h += "for(var i=0;i<cfg.keys.length;i++){";
+  h += "var el=document.getElementById('k'+i+'_preview');if(el)el.innerHTML=buildUrl(i);}}";
+
+  h += "function buildKeyCards(data){";
+  h += "cfg=data;var c=document.getElementById('keys-container');c.innerHTML='';";
+  h += "data.keys.forEach(function(k,i){";
+  h += "var s=\"<div class='key-card'><div class='key-header'>\";";
+  h += "s+=\"<span class='key-num'>\"+(i+1)+\"</span>\";";
+  h += "s+=\"<input type='text' id='k\"+i+\"_label' value='\"+k.label+\"' \";";
+  h += "s+=\"style='background:transparent;border:none;color:#fff;font-family:Exo 2,sans-serif;font-weight:600;font-size:.9rem;flex:1;outline:none;'>\";";
+  h += "s+=\"<span class='key-pin'>GPIO \"+k.pin+\"</span>\";";
+  h += "s+=\"<label class='toggle'><input type='checkbox' id='k\"+i+\"_enabled' \"+(k.enabled?'checked':'')+\">\";";
+  h += "s+=\"<div class='toggle-track'></div><div class='toggle-thumb'></div></label></div>\";";
+  h += "s+=\"<div class='key-body'><div class='key-row'>\";";
+  h += "s+=\"<div class='field'><label>Page</label><input type='number' id='k\"+i+\"_page' value='\"+k.page+\"' min='1' max='99' oninput='refreshPreviews()'></div>\";";
+  h += "s+=\"<div class='field'><label>Row</label><input type='number' id='k\"+i+\"_row' value='\"+k.row+\"' min='0' max='7' oninput='refreshPreviews()'></div>\";";
+  h += "s+=\"<div class='field'><label>Col</label><input type='number' id='k\"+i+\"_col' value='\"+k.col+\"' min='0' max='7' oninput='refreshPreviews()'></div>\";";
+  h += "s+=\"</div><div class='url-preview' id='k\"+i+\"_preview'></div>\";";
+  h += "s+=\"<div class='btn-row'><button class='btn-test' onclick='testKey(\"+i+\")'>&#9654; TEST PRESS</button></div>\";";
+  h += "s+=\"</div></div>\";";
+  h += "c.innerHTML+=s;});refreshPreviews();}";
+
+  h += "function loadConfig(){";
+  h += "fetch('/api/config').then(function(r){return r.json();}).then(function(d){";
+  h += "document.getElementById('wifi_ssid').value=d.wifi_ssid||'';";
+  h += "document.getElementById('wifi_password').value='';";
+  h += "document.getElementById('companion_ip').value=d.companion_ip||'';";
+  h += "document.getElementById('companion_port').value=d.companion_port||8888;";
+  h += "buildKeyCards(d);showToast('Config chargee',true);";
+  h += "}).catch(function(){showToast('Erreur chargement',false);});}";
+
+  h += "function saveConfig(){";
+  h += "var keys=cfg.keys.map(function(_,i){return{";
+  h += "label:document.getElementById('k'+i+'_label').value,";
+  h += "page:+document.getElementById('k'+i+'_page').value,";
+  h += "row:+document.getElementById('k'+i+'_row').value,";
+  h += "col:+document.getElementById('k'+i+'_col').value,";
+  h += "enabled:document.getElementById('k'+i+'_enabled').checked};});";
+  h += "var p={wifi_ssid:document.getElementById('wifi_ssid').value,";
+  h += "wifi_password:document.getElementById('wifi_password').value,";
+  h += "companion_ip:document.getElementById('companion_ip').value,";
+  h += "companion_port:+document.getElementById('companion_port').value,keys:keys};";
+  h += "fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)})";
+  h += ".then(function(r){return r.json();}).then(function(d){";
+  h += "showToast(d.status==='ok'?'Sauvegarde OK':'Erreur serveur',d.status==='ok');})";
+  h += ".catch(function(){showToast('Erreur reseau',false);});}";
+
+  h += "function testKey(idx){";
+  h += "fetch('/api/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:idx})})";
+  h += ".then(function(){showToast('Key '+(idx+1)+' - press envoye',true);})";
+  h += ".catch(function(){showToast('Erreur test',false);});}";
+
+  h += "function reboot(){";
+  h += "if(!confirm('Redemarrer l ESP32 ?'))return;";
+  h += "fetch('/api/reboot',{method:'POST'});showToast('Redemarrage...',true);}";
+
+  h += "function showToast(msg,ok){";
+  h += "var t=document.getElementById('toast');";
+  h += "t.textContent=msg;t.className='toast '+(ok?'ok':'err');t.style.display='block';";
+  h += "clearTimeout(t._t);t._t=setTimeout(function(){t.style.display='none';},3000);}";
+
+  h += "loadConfig();";
+  h += "</script></body></html>";
+
+  return h;
+}
