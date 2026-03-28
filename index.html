@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Key 32 Studio</title>
+
+    <style>
+
+      :root {
+        --bg: #0a0c10;
+        --surface: #12161e;
+        --surface2: #1a2030;
+        --border: #2a3448;
+        --accent: #00d4ff;
+        --accent2: #ff6b35;
+        --green: #39ff14;
+        --text: #c8d8f0;
+        --muted: #4a5a78;
+        --danger: #ff2d55;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Exo 2', sans-serif;
+        min-height: 100vh;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 20px 32px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 32px 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 32px;
+      }
+
+      section {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+      }
+
+      .sec-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 24px;
+        background: var(--surface2);
+      }
+
+      .sec-body {
+        padding: 24px;
+      }
+
+      .grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      input {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 10px;
+      }
+
+      button {
+        padding: 10px 16px;
+        cursor: pointer;
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: #000;
+      }
+
+      .btn-ghost {
+        background: transparent;
+        color: #fff;
+      }
+
+      .btn-danger {
+        color: red;
+      }
+    </style>
+  </head>
+
+  <body>
+    <header>
+      <h1>Key 32 Studio</h1>
+    </header>
+
+    <main>
+      <section>
+        <div class="sec-header">WiFi</div>
+        <div class="sec-body grid2">
+          <div class="field">
+            <label>SSID</label>
+            <input type="text" id="wifi_ssid" />
+          </div>
+
+          <div class="field">
+            <label>Mot de passe</label>
+            <input type="password" id="wifi_password" />
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-header">Bitfocus Companion</div>
+        <div class="sec-body grid2">
+          <div class="field">
+            <label>Adresse IP</label>
+            <input type="text" id="companion_ip" />
+          </div>
+
+          <div class="field">
+            <label>Port HTTP</label>
+            <input type="number" id="companion_port" value="8888" />
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-header">Touches</div>
+        <div class="sec-body">
+          <div id="keys-container"></div>
+        </div>
+      </section>
+
+      <div>
+        <button class="btn-primary" onclick="saveConfig()">Sauvegarder</button>
+        <button class="btn-ghost" onclick="loadConfig()">Recharger</button>
+        <button class="btn-danger" onclick="reboot()">Redémarrer</button>
+      </div>
+    </main>
+
+    <script>
+        var cfg={keys:[],companion_ip:'',companion_port:8888};
+
+        function buildUrl(i) {
+            var ip =
+            document.getElementById('companion_ip').value ||
+            cfg.companion_ip ||
+            '...';
+
+            var port =
+            document.getElementById('companion_port').value ||
+            cfg.companion_port ||
+            8888;
+
+            var pg = document.getElementById('k' + i + '_page')
+            ? document.getElementById('k' + i + '_page').value
+            : (cfg.keys[i] ? cfg.keys[i].page : 1);
+
+            var rw = document.getElementById('k' + i + '_row')
+            ? document.getElementById('k' + i + '_row').value
+            : (cfg.keys[i] ? cfg.keys[i].row : 0);
+
+            var cl = document.getElementById('k' + i + '_col')
+            ? document.getElementById('k' + i + '_col').value
+            : (cfg.keys[i] ? cfg.keys[i].col : 0);
+
+            return 'http://'+ip+':'+port+'/api/location/'+pg+'/'+rw+'/'+cl+'/<b>down</b> | <b>up</b>';
+        }
+
+        function refreshPreviews() {
+            for (var i = 0; i < cfg.keys.length; i++) {
+            var el = document.getElementById('k' + i + '_preview');
+            if (el) {
+                el.innerHTML = buildUrl(i);
+            }
+            }
+        }
+
+        function buildKeyCards(data) {
+            cfg = data;
+
+            var container = document.getElementById('keys-container');
+            container.innerHTML = '';
+
+            data.keys.forEach(function (k, i) {
+            var s = '';
+
+            s += "<div class='key-card'>";
+            s += "  <div class='key-header'>";
+            s += "    <span class='key-num'>" + (i + 1) + "</span>";
+
+            s +=
+                "    <input type='text' id='k" +
+                i +
+                "_label' value='" +
+                k.label +
+                "' style='background:transparent;border:none;color:#fff;font-family:Exo 2,sans-serif;font-weight:600;font-size:.9rem;flex:1;outline:none;'>";
+
+            s += "    <span class='key-pin'>GPIO " + k.pin + "</span>";
+
+            s += "    <label class='toggle'>";
+            s +=
+                "      <input type='checkbox' id='k" +
+                i +
+                "_enabled' " +
+                (k.enabled ? 'checked' : '') +
+                '>';
+            s += "      <div class='toggle-track'></div>";
+            s += "      <div class='toggle-thumb'></div>";
+            s += "    </label>";
+
+            s += "  </div>";
+
+            s += "  <div class='key-body'>";
+            s += "    <div class='key-row'>";
+
+            s +=
+                "      <div class='field'><label>Page</label><input type='number' id='k" +
+                i +
+                "_page' value='" +
+                k.page +
+                "' min='1' max='99' oninput='refreshPreviews()'></div>";
+
+            s +=
+                "      <div class='field'><label>Row</label><input type='number' id='k" +
+                i +
+                "_row' value='" +
+                k.row +
+                "' min='0' max='7' oninput='refreshPreviews()'></div>";
+
+            s +=
+                "      <div class='field'><label>Col</label><input type='number' id='k" +
+                i +
+                "_col' value='" +
+                k.col +
+                "' min='0' max='7' oninput='refreshPreviews()'></div>";
+
+            s += "    </div>";
+
+            s +=
+                "    <div class='url-preview' id='k" +
+                i +
+                "_preview'></div>";
+
+            s += "    <div class='btn-row'>";
+            s +=
+                "      <button class='btn-test' onclick='testKey(" +
+                i +
+                ")'>&#9654; TEST PRESS</button>";
+            s += "    </div>";
+
+            s += "  </div>";
+            s += "</div>";
+
+            container.innerHTML += s;
+            });
+
+            refreshPreviews();
+        }
+
+        function loadConfig() {
+            fetch('/api/config')
+            .then(function (r) {
+                return r.json();
+            })
+            .then(function (d) {
+                document.getElementById('wifi_ssid').value = d.wifi_ssid || '';
+                document.getElementById('wifi_password').value = '';
+
+                document.getElementById('companion_ip').value =
+                d.companion_ip || '';
+                document.getElementById('companion_port').value =
+                d.companion_port || 8888;
+
+                buildKeyCards(d);
+
+                showToast('Config chargee', true);
+            })
+            .catch(function () {
+                showToast('Erreur chargement', false);
+            });
+        }
+
+        function saveConfig() {
+            var keys = cfg.keys.map(function (_, i) {
+            return {
+                label: document.getElementById('k' + i + '_label').value,
+                page: +document.getElementById('k' + i + '_page').value,
+                row: +document.getElementById('k' + i + '_row').value,
+                col: +document.getElementById('k' + i + '_col').value,
+                enabled: document.getElementById('k' + i + '_enabled').checked
+            };
+            });
+
+            var payload = {
+            wifi_ssid: document.getElementById('wifi_ssid').value,
+            wifi_password: document.getElementById('wifi_password').value,
+            companion_ip: document.getElementById('companion_ip').value,
+            companion_port: +document.getElementById('companion_port').value,
+            keys: keys
+            };
+
+            fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+            })
+            .then(function (r) {
+                return r.json();
+            })
+            .then(function (d) {
+                showToast(
+                d.status === 'ok' ? 'Sauvegarde OK' : 'Erreur serveur',
+                d.status === 'ok'
+                );
+            })
+            .catch(function () {
+                showToast('Erreur reseau', false);
+            });
+        }
+
+        function testKey(idx) {
+            fetch('/api/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: idx })
+            })
+            .then(function () {
+                showToast('Key ' + (idx + 1) + ' - press envoye', true);
+            })
+            .catch(function () {
+                showToast('Erreur test', false);
+            });
+        }
+
+        function reboot() {
+            if (!confirm('Redemarrer l ESP32 ?')) {
+            return;
+            }
+
+            fetch('/api/reboot', { method: 'POST' });
+
+            showToast('Redemarrage...', true);
+        }
+
+        function showToast(msg, ok) {
+            var t = document.getElementById('toast');
+
+            t.textContent = msg;
+            t.className = 'toast ' + (ok ? 'ok' : 'err');
+            t.style.display = 'block';
+
+            clearTimeout(t._t);
+            t._t = setTimeout(function () {
+            t.style.display = 'none';
+            }, 3000);
+        }
+
+        loadConfig();
+    </script>
+
+  </body>
+</html>
