@@ -40,6 +40,7 @@ Il permet de contrôler Companion via l’API REST avec des **boutons physiques*
 - [ ] Ajouter LEDs d’état configurables dans l’interface Web
 - [ ] Ajouter gestion des boutons en matrice
 - [ ] Ajouter écran OLED pour affichage IP et infos Companion
+- [ ] Afficher label sur l'écran (via une touche info par exemple)
 - [ ] Ajouter profils de boutons sauvegardables
 - [ ] Connexion Ethernet
 - [ ] Alimentation via PoE
